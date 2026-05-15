@@ -1,5 +1,6 @@
 #include "silver/opt/const_fold.h"
 #include <math.h>
+#include <stdlib.h>
 
 // 安全的有符号加法（检测溢出）
 static bool safe_add_i64(int64_t a, int64_t b, int64_t *result) {
@@ -536,24 +537,130 @@ bool const_fold_instruction(OptContext *ctx, IRFunction *func,
     return false;
 }
 
+// ============================================================
+// 查找指令的结果值ID
+// ============================================================
+static IRValueId find_inst_result(IRFunction *func, IRValuePool *pool, uint32_t inst_idx, IRTypeId type_id) {
+    // 优先使用映射表
+    if (func->inst_to_value && inst_idx < func->inst_to_value_capacity) {
+        IRValueId vid = func->inst_to_value[inst_idx];
+        if (vid != IR_VALUE_ID_INVALID && vid < pool->num_values) {
+            if (pool->values[vid].kind == IR_VALUE_INSTRUCTION) {
+                return vid;
+            }
+        }
+    }
+    // 回退到遍历值池
+    for (uint32_t v = 0; v < pool->num_values; v++) {
+        if (pool->values[v].kind == IR_VALUE_INSTRUCTION &&
+            pool->values[v].inst_id == inst_idx &&
+            pool->values[v].type_id == type_id) {
+            return v;
+        }
+    }
+    return IR_VALUE_ID_INVALID;
+}
+
+// ============================================================
+// ✅ 常量传播：将常量通过指令链向前传播
+// ============================================================
 bool opt_const_fold(OptContext *ctx) {
     if (!ctx || !ctx->module) return false;
     
     bool changed = false;
     IRModule *module = ctx->module;
+    IRValuePool *pool = &module->value_pool;
     
-    // 遍历所有函数的所有指令
     for (uint32_t f = 0; f < module->num_functions; f++) {
         IRFunction *func = &module->functions[f];
         ctx->current_func = func;
         
-        for (uint32_t i = 0; i < func->num_insts; i++) {
-            IRInst *inst = &func->instructions[i];
-            
-            if (const_fold_instruction(ctx, func, i, inst)) {
-                changed = true;
+        uint32_t num_vals = pool->num_values;
+        // 预分配足够空间（值池可能在传播过程中增长）
+        uint32_t alloc_size = num_vals + func->num_insts + 128;
+        
+        int64_t *const_vals = (int64_t *)calloc(alloc_size, sizeof(int64_t));
+        uint8_t *is_const_v = (uint8_t *)calloc(alloc_size, 1);
+        
+        if (!const_vals || !is_const_v) {
+            free(const_vals); free(is_const_v);
+            continue;
+        }
+        
+        // 初始化：标记所有现有常量值
+        for (uint32_t v = 0; v < num_vals; v++) {
+            if (pool->values[v].kind == IR_VALUE_CONSTANT) {
+                const_vals[v] = pool->values[v].int_val;
+                is_const_v[v] = 1;
             }
         }
+        
+        // ✅ 多遍扫描直到收敛
+        bool propagated = true;
+        int max_passes = 20;
+        
+        while (propagated && max_passes > 0) {
+            propagated = false;
+            max_passes--;
+            
+            for (uint32_t i = 0; i < func->num_insts; i++) {
+                IRInst *inst = &func->instructions[i];
+                
+                // 跳过终结指令、COPY、CALL等
+                if (inst->opcode == IR_OP_COPY || 
+                    inst->opcode == IR_OP_RET ||
+                    inst->opcode == IR_OP_BR || 
+                    inst->opcode == IR_OP_BRCOND ||
+                    inst->opcode == IR_OP_STORE || 
+                    inst->opcode == IR_OP_CALL ||
+                    inst->opcode == IR_OP_PHI ||
+                    inst->opcode == IR_OP_LOAD ||
+                    inst->opcode == IR_OP_ALLOCA) {
+                    continue;
+                }
+                
+                int nops = ir_opcode_num_operands(inst->opcode);
+                if (nops < 2) continue;
+                
+                IRValueId o0 = inst->operand0_id;
+                IRValueId o1 = inst->operand1_id;
+                
+                if (o0 >= alloc_size || o1 >= alloc_size) continue;
+                if (!is_const_v[o0] || !is_const_v[o1]) continue;
+                
+                // 两个操作数都是常量 → 折叠
+                int64_t result_val;
+                if (fold_int_operation(inst->opcode, const_vals[o0], const_vals[o1], &result_val)) {
+                    // 创建新常量值
+                    IRValueId new_cid = ir_value_create_int_const(pool, inst->type_id, result_val);
+                    
+                    // ✅ 将指令替换为 COPY
+                    inst->opcode = IR_OP_COPY;
+                    inst->operand0_id = new_cid;
+                    inst->operand1_id = IR_VALUE_ID_INVALID;
+                    inst->operand2_id = IR_VALUE_ID_INVALID;
+                    
+                    // ✅ 标记新常量和指令结果值
+                    if (new_cid < alloc_size) {
+                        const_vals[new_cid] = result_val;
+                        is_const_v[new_cid] = 1;
+                    }
+                    
+                    IRValueId rid = find_inst_result(func, pool, i, inst->type_id);
+                    if (rid != IR_VALUE_ID_INVALID && rid < alloc_size) {
+                        const_vals[rid] = result_val;
+                        is_const_v[rid] = 1;
+                    }
+                    
+                    ctx->stats.constants_folded++;
+                    propagated = true;
+                    changed = true;
+                }
+            }
+        }
+        
+        free(const_vals);
+        free(is_const_v);
     }
     
     return changed;

@@ -201,7 +201,7 @@ SilverCompileResult *silver_compile(SilverContext *ctx,
             "Failed to create code generation context");
         goto error;
     }
-    
+
     // 设置匹配表
     switch (target->arch) {
         case SILVER_TARGET_X86_64:

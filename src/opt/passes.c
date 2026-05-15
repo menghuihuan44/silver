@@ -44,9 +44,15 @@ bool opt_run_all(OptContext *ctx) {
     bool changed = false;
     
     // 第一遍：前向扫描优化
-    // 常量折叠
+    // ✅ 第一遍：常量传播
     changed |= opt_const_fold(ctx);
     
+    // DCE
+    changed |= opt_dead_code_eliminate(ctx);
+    
+    // ✅ 第二遍：常量传播（DCE可能暴露新的常量机会）
+    changed |= opt_const_fold(ctx);
+
     // 代数简化
     changed |= opt_algebraic_simplify(ctx);
     
