@@ -6,7 +6,7 @@ includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 Name: silver
 Description: Silver - Fast Cross-Platform Compiler Backend
 Version: @PROJECT_VERSION@
-URL: https://github.com/silver-project/silver
+URL: https://github.com/menghuihuan44/silver
 Requires: 
 Requires.private: 
 Cflags: -I${includedir}

@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.16)
 project(silver
     VERSION 0.1.0
     DESCRIPTION "Silver - Fast Cross-Platform Compiler Backend"
-    # HOMEPAGE_URL "https://github.com/silver-project/silver"
+    HOMEPAGE_URL "https://github.com/menghuihuan44/silver"
     LANGUAGES C
 )
 
@@ -770,8 +770,8 @@ set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_VENDOR "Silver Project")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Silver - Fast Cross-Platform Compiler Backend")
 set(CPACK_PACKAGE_CONTACT "silver-dev@example.com")
-# set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
-# set(CPACK_RESOURCE_FILE_README ${CMAKE_CURRENT_SOURCE_DIR}/README.md)
+set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
+set(CPACK_RESOURCE_FILE_README ${CMAKE_CURRENT_SOURCE_DIR}/README.md)
 
 # 根据平台生成不同的包格式
 if(SILVER_HOST_OS STREQUAL "linux")
