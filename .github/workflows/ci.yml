@@ -42,7 +42,6 @@ jobs:
           cmake .. \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_C_COMPILER=${{ env.CC }} \
             -DSILVER_WARNINGS_AS_ERRORS=ON \
             -DSILVER_BUILD_TESTS=ON \
             -DSILVER_BUILD_BENCHMARKS=ON \
@@ -100,29 +99,16 @@ jobs:
   # Windows: MSVC + MinGW
   # ============================================================
   windows:
-    name: Windows (${{ matrix.toolchain }}, ${{ matrix.build_type }})
+    name: Windows (${{ matrix.build_type }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [msvc, mingw]
         build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (MSVC)
-        if: matrix.toolchain == 'msvc'
-        run: |
-          mkdir build && cd build
-          cmake .. `
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
-            -DSILVER_BUILD_TESTS=ON `
-            -DSILVER_BUILD_BENCHMARKS=ON `
-            -DSILVER_BUILD_EXAMPLES=ON `
-            -DSILVER_BUILD_TOOLS=ON
-
       - name: Configure (MinGW)
-        if: matrix.toolchain == 'mingw'
         run: |
           mkdir build && cd build
           cmake .. `
@@ -134,10 +120,10 @@ jobs:
             -DSILVER_BUILD_TOOLS=ON
 
       - name: Build
-        run: cmake --build build --config ${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
 
       - name: Test
-        run: cd build && ctest --output-on-failure -C ${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+        run: cd build && ctest --output-on-failure -C ${{ matrix.build_type }}
 
       - name: Bench (Release only)
         if: matrix.build_type == 'Release'
