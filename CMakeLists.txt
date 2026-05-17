@@ -156,6 +156,8 @@ elseif(SILVER_COMPILER_CLANG)
         -Wnull-dereference
         -Wno-unused-parameter
         -Wno-missing-field-initializers
+        -Wno-newline-eof
+        -Wno-format-nonliteral
     )
 elseif(SILVER_COMPILER_MSVC)
     list(APPEND SILVER_COMMON_FLAGS
