@@ -440,7 +440,7 @@ add_executable(silverc
     tools/driver/main.c
 )
 
-target_link_libraries(silverc PRIVATE ${SILVER_LIB})
+target_link_libraries(silverc PRIVATE ${SILVER_LIB} m)
 
 target_include_directories(silverc PRIVATE
     ${SILVER_INCLUDE_DIR}
@@ -461,14 +461,14 @@ if(SILVER_BUILD_TOOLS)
     add_executable(silver_dump
         tools/dump/dump.c
     )
-    target_link_libraries(silver_dump PRIVATE ${SILVER_LIB})
+    target_link_libraries(silver_dump PRIVATE ${SILVER_LIB} m)
     target_include_directories(silver_dump PRIVATE ${SILVER_INCLUDE_DIR})
     
     # 性能分析工具
     add_executable(silver_analyze
         tools/analyzer/silver_analyze.c
     )
-    target_link_libraries(silver_analyze PRIVATE ${SILVER_LIB} m)
+    target_link_libraries(silver_analyze PRIVATE ${SILVER_LIB} m m)
     target_include_directories(silver_analyze PRIVATE ${SILVER_INCLUDE_DIR})
 endif()
 
@@ -490,44 +490,44 @@ if(SILVER_BUILD_TESTS)
     
     # test_ir
     add_executable(test_ir tests/unit/test_ir.c)
-    target_link_libraries(test_ir PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_ir PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_ir PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_ir COMMAND test_ir)
     
     # test_opt
     add_executable(test_opt tests/unit/test_opt.c)
-    target_link_libraries(test_opt PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_opt PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_opt PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_opt COMMAND test_opt)
     
     # test_codegen
     add_executable(test_codegen tests/unit/test_codegen.c)
-    target_link_libraries(test_codegen PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_codegen PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_codegen PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_codegen COMMAND test_codegen)
     
     # test_arena
     add_executable(test_arena tests/unit/test_arena.c)
-    target_link_libraries(test_arena PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_arena PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_arena PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_arena COMMAND test_arena)
     
     # test_targets
     add_executable(test_targets tests/unit/test_targets.c)
-    target_link_libraries(test_targets PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_targets PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_targets PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_targets COMMAND test_targets)
     
     # 集成测试
     # test_full_pipeline
     add_executable(test_full_pipeline tests/integration/test_full_pipeline.c)
-    target_link_libraries(test_full_pipeline PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_full_pipeline PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_full_pipeline PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_full_pipeline COMMAND test_full_pipeline)
     
     # test_platforms
     add_executable(test_platforms tests/integration/test_platforms.c)
-    target_link_libraries(test_platforms PRIVATE ${SILVER_LIB})
+    target_link_libraries(test_platforms PRIVATE ${SILVER_LIB} m)
     target_include_directories(test_platforms PRIVATE ${SILVER_INCLUDE_DIR})
     add_test(NAME test_platforms COMMAND test_platforms)
     
@@ -581,11 +581,11 @@ endif()
 
 if(SILVER_BUILD_EXAMPLES)
     add_executable(example_hello examples/hello_world.c)
-    target_link_libraries(example_hello PRIVATE ${SILVER_LIB})
+    target_link_libraries(example_hello PRIVATE ${SILVER_LIB} m)
     target_include_directories(example_hello PRIVATE ${SILVER_INCLUDE_DIR})
     
     add_executable(example_fib examples/fibonacci.c)
-    target_link_libraries(example_fib PRIVATE ${SILVER_LIB})
+    target_link_libraries(example_fib PRIVATE ${SILVER_LIB} m)
     target_include_directories(example_fib PRIVATE ${SILVER_INCLUDE_DIR})
 endif()
 
