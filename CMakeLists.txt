@@ -219,13 +219,6 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
         list(APPEND CMAKE_EXE_LINKER_FLAGS /LTCG /OPT:REF)
         list(APPEND CMAKE_SHARED_LINKER_FLAGS /LTCG /OPT:REF)
     endif()
-
-    # 库的 LTO
-    if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
-        set_target_properties(silver_static silver_shared PROPERTIES
-            INTERPROCEDURAL_OPTIMIZATION TRUE
-        )
-    endif()
 endif()
 
 # 性能分析选项
