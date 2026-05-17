@@ -596,7 +596,7 @@ endif()
 # 运行所有测试
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -j${NPROC} -V
-    DEPENDS ${SILVER_UNIT_TESTS} test_full_pipeline
+    DEPENDS ${SILVER_UNIT_TESTS} test_full_pipeline test_platforms
     COMMENT "Running all Silver tests"
     USES_TERMINAL
 )
@@ -612,7 +612,7 @@ add_custom_target(check-unit
 # 运行集成测试
 add_custom_target(check-integration
     COMMAND ${CMAKE_CTEST_COMMAND} -L integration --output-on-failure
-    DEPENDS test_full_pipeline
+    DEPENDS test_full_pipeline test_platforms
     COMMENT "Running integration tests"
     USES_TERMINAL
 )

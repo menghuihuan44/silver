@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # ============================================================
+  # Linux x86-64: GCC + Clang
+  # ============================================================
+  linux:
+    name: Linux (${{ matrix.compiler }}, ${{ matrix.build_type }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Setup GCC
+        if: matrix.compiler == 'gcc'
+        run: |
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+
+      - name: Setup Clang
+        if: matrix.compiler == 'clang'
+        run: |
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+
+      - name: Configure
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=${{ env.CC }} \
+            -DSILVER_WARNINGS_AS_ERRORS=ON \
+            -DSILVER_BUILD_TESTS=ON \
+            -DSILVER_BUILD_BENCHMARKS=ON \
+            -DSILVER_BUILD_EXAMPLES=ON \
+            -DSILVER_BUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure -j$(nproc)
+
+      - name: Bench (Release only)
+        if: matrix.build_type == 'Release'
+        run: cd build && ctest -L benchmark --output-on-failure
+
+  # ============================================================
+  # macOS: Apple Clang
+  # ============================================================
+  macos:
+    name: macOS (${{ matrix.build_type }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install ninja
+
+      - name: Configure
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DSILVER_BUILD_TESTS=ON \
+            -DSILVER_BUILD_BENCHMARKS=ON \
+            -DSILVER_BUILD_EXAMPLES=ON \
+            -DSILVER_BUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure -j$(sysctl -n hw.logicalcpu)
+
+      - name: Bench (Release only)
+        if: matrix.build_type == 'Release'
+        run: cd build && ctest -L benchmark --output-on-failure
+
+  # ============================================================
+  # Windows: MSVC + MinGW
+  # ============================================================
+  windows:
+    name: Windows (${{ matrix.toolchain }}, ${{ matrix.build_type }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [msvc, mingw]
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (MSVC)
+        if: matrix.toolchain == 'msvc'
+        run: |
+          mkdir build && cd build
+          cmake .. `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DSILVER_BUILD_TESTS=ON `
+            -DSILVER_BUILD_BENCHMARKS=ON `
+            -DSILVER_BUILD_EXAMPLES=ON `
+            -DSILVER_BUILD_TOOLS=ON
+
+      - name: Configure (MinGW)
+        if: matrix.toolchain == 'mingw'
+        run: |
+          mkdir build && cd build
+          cmake .. `
+            -G "MinGW Makefiles" `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DSILVER_BUILD_TESTS=ON `
+            -DSILVER_BUILD_BENCHMARKS=ON `
+            -DSILVER_BUILD_EXAMPLES=ON `
+            -DSILVER_BUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Test
+        run: cd build && ctest --output-on-failure -C ${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Bench (Release only)
+        if: matrix.build_type == 'Release'
+        run: cd build && ctest -L benchmark --output-on-failure -C Release
+
+  # ============================================================
+  # 代码格式检查（可选）
+  # ============================================================
+  lint:
+    name: Lint (clang-format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        run: |
+          find . -name '*.c' -o -name '*.h' | grep -v build | xargs clang-format --dry-run --Werror
+        continue-on-error: true  # 格式问题不阻塞 CI

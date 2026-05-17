@@ -43,31 +43,37 @@ bool opt_run_all(OptContext *ctx) {
     
     bool changed = false;
     
-    // 第一遍：前向扫描优化
-    // ✅ 第一遍：常量传播
-    changed |= opt_const_fold(ctx);
-    
-    // DCE
-    changed |= opt_dead_code_eliminate(ctx);
-    
-    // ✅ 第二遍：常量传播（DCE可能暴露新的常量机会）
-    changed |= opt_const_fold(ctx);
-
-    // 代数简化
-    changed |= opt_algebraic_simplify(ctx);
-    
-    // 强度削弱
-    changed |= opt_strength_reduce(ctx);
-    
-    // 窥孔优化
-    changed |= opt_peephole(ctx);
-    
-    // 第二遍：后向扫描+Worklist优化
-    // 复写传播
-    changed |= opt_copy_propagate(ctx);
-    
-    // 死代码消除
-    changed |= opt_dead_code_eliminate(ctx);
+    // ============================================================
+    // 迭代优化直到收敛（最多10遍）
+    // 每遍：常量传播 → 代数简化 → 强度削弱 → 复写传播 → DCE → 窥孔
+    // 上一遍的DCE可能暴露新的优化机会，下一遍继续处理
+    // ============================================================
+    for (int iter = 0; iter < 10; iter++) {
+        bool pass_changed = false;
+        
+        // 常量传播 + 折叠
+        pass_changed |= opt_const_fold(ctx);
+        
+        // 代数简化（x+0→x, x*1→x等）
+        pass_changed |= opt_algebraic_simplify(ctx);
+        
+        // 强度削弱（x*2→x<<1, x/4→x>>2等）
+        pass_changed |= opt_strength_reduce(ctx);
+        
+        // 复写传播（copy链替换）
+        pass_changed |= opt_copy_propagate(ctx);
+        
+        // 死代码消除
+        pass_changed |= opt_dead_code_eliminate(ctx);
+        
+        // 窥孔优化
+        pass_changed |= opt_peephole(ctx);
+        
+        changed |= pass_changed;
+        
+        // 如果本遍没有任何优化触发，说明收敛了，提前退出
+        if (!pass_changed) break;
+    }
     
     ctx->changed = changed;
     return changed;

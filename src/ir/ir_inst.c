@@ -188,7 +188,7 @@ int ir_opcode_num_operands(IROpcode opcode) {
             return 1;
         
         case IR_OP_PHI:
-            return 0;  // PHI的操作数在extra部分
+            return 2;  // PHI的操作数在extra部分
         
         case IR_OP_CALL:
             return 1;  // 被调用函数（参数在extra部分）

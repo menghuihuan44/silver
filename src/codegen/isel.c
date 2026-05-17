@@ -504,12 +504,188 @@ bool isel_select_instruction(CodeGenContext *ctx, IRInst *ir_inst,
 }
 
 // ============================================================
-// ✅ 修复后的函数代码生成 — 全部使用 ctx->code_emitter
+// PHI elimination: 将 PHI 指令转换为前驱块末尾的 COPY
+// 在寄存器分配前运行
 // ============================================================
+static void phi_elimination(IRFunction *func, IRModule *module) {
+    IRValuePool *pool = &module->value_pool;
+    
+    for (uint32_t i = 0; i < func->num_insts; i++) {
+        IRInst *inst = &func->instructions[i];
+        if (inst->opcode != IR_OP_PHI) continue;
+        
+        uint32_t num_incoming = inst->extra;
+        if (num_incoming == 0) continue;
+        
+        // 找到 PHI 所在的基本块
+        IRBlock *phi_block = NULL;
+        for (uint32_t b = 0; b < func->num_blocks; b++) {
+            if (func->blocks[b].first_inst <= i && i <= func->blocks[b].last_inst) {
+                phi_block = &func->blocks[b];
+                break;
+            }
+        }
+        if (!phi_block) continue;
+        
+        // 找到 PHI 指令的结果值ID
+        IRValueId phi_result = IR_VALUE_ID_INVALID;
+        for (uint32_t v = 0; v < pool->num_values; v++) {
+            if (pool->values[v].kind == IR_VALUE_INSTRUCTION &&
+                pool->values[v].inst_id == i &&
+                pool->values[v].type_id == inst->type_id) {
+                phi_result = v;
+                break;
+            }
+        }
+        if (phi_result == IR_VALUE_ID_INVALID) continue;
+        
+        // 获取前驱块和对应的值
+        // operand0 = 第一个值, operand1 = 第一个块
+        // operand2 = 第二个值（如果存在）
+        IRValueId val0 = inst->operand0_id;
+        IRValueId block0_id = inst->operand1_id;
+        
+        IRValue *block0_val = ir_value_get(pool, block0_id);
+        if (!block0_val || block0_val->kind != IR_VALUE_BLOCK) continue;
+        uint32_t pred0_id = block0_val->block_id;
+        IRBlock *pred0 = &func->blocks[pred0_id];
+        
+        // 在前驱块0末尾插入 COPY phi_result = val0
+        // 找到前驱块的终结指令位置
+        if (pred0->last_inst != IR_VALUE_ID_INVALID) {
+            uint32_t term_pos = pred0->last_inst;
+            // 在终结指令之前插入 COPY
+            IRInst copy_inst;
+            memset(&copy_inst, 0, sizeof(copy_inst));
+            copy_inst.opcode = IR_OP_COPY;
+            copy_inst.type_id = inst->type_id;
+            copy_inst.operand0_id = (uint16_t)val0;
+            copy_inst.original_order = func->num_insts;
+            
+            // 插入：终结指令后移，COPY放在它前面
+            // 简化：直接在终结指令位置写入COPY，原终结指令后移
+            if (func->num_insts >= func->inst_capacity) {
+                // 扩展指令数组
+                uint32_t new_cap = func->inst_capacity * 2;
+                IRInst *new_insts = (IRInst *)arena_calloc(
+                    module->arena, new_cap * sizeof(IRInst));
+                if (!new_insts) continue;
+                memcpy(new_insts, func->instructions,
+                       func->num_insts * sizeof(IRInst));
+                func->instructions = new_insts;
+                func->inst_capacity = new_cap;
+            }
+            
+            // 将终结指令后移一位
+            memmove(&func->instructions[term_pos + 1],
+                    &func->instructions[term_pos],
+                    (func->num_insts - term_pos) * sizeof(IRInst));
+            
+            // 在终结指令位置写入 COPY
+            func->instructions[term_pos] = copy_inst;
+            func->num_insts++;
+            
+            // 更新块和后续指令的索引
+            pred0->last_inst++;
+            for (uint32_t b = 0; b < func->num_blocks; b++) {
+                if (func->blocks[b].first_inst > term_pos) {
+                    func->blocks[b].first_inst++;
+                }
+                if (func->blocks[b].last_inst >= term_pos) {
+                    func->blocks[b].last_inst++;
+                }
+            }
+            // 更新值池中的 inst_id
+            for (uint32_t v = 0; v < pool->num_values; v++) {
+                if (pool->values[v].kind == IR_VALUE_INSTRUCTION &&
+                    pool->values[v].inst_id > term_pos) {
+                    pool->values[v].inst_id++;
+                }
+            }
+            // 更新 inst_to_value 映射
+            if (func->inst_to_value) {
+                for (uint32_t vi = func->inst_to_value_capacity - 1; vi > term_pos; vi--) {
+                    func->inst_to_value[vi] = func->inst_to_value[vi - 1];
+                }
+                func->inst_to_value[term_pos] = IR_VALUE_ID_INVALID;
+            }
+        }
+        
+        // 处理第二个前驱（如果存在）
+        if (num_incoming >= 2 && inst->operand2_id != IR_VALUE_ID_INVALID) {
+            IRValueId val1 = inst->operand2_id;
+            
+            // 找到第二个前驱块
+            // 从 phi_block 的前驱列表中获取
+            uint32_t pred1_id = UINT32_MAX;
+            for (uint32_t p = 0; p < phi_block->num_predecessors; p++) {
+                if (phi_block->predecessors[p] != pred0_id) {
+                    pred1_id = phi_block->predecessors[p];
+                    break;
+                }
+            }
+            
+            if (pred1_id != UINT32_MAX && pred1_id < func->num_blocks) {
+                IRBlock *pred1 = &func->blocks[pred1_id];
+                if (pred1->last_inst != IR_VALUE_ID_INVALID) {
+                    uint32_t term_pos1 = pred1->last_inst;
+                    
+                    // 扩展数组
+                    if (func->num_insts >= func->inst_capacity) {
+                        uint32_t new_cap = func->inst_capacity * 2;
+                        IRInst *new_insts = (IRInst *)arena_calloc(
+                            module->arena, new_cap * sizeof(IRInst));
+                        if (!new_insts) continue;
+                        memcpy(new_insts, func->instructions,
+                               func->num_insts * sizeof(IRInst));
+                        func->instructions = new_insts;
+                        func->inst_capacity = new_cap;
+                    }
+                    
+                    // 插入 COPY
+                    IRInst copy_inst;
+                    memset(&copy_inst, 0, sizeof(copy_inst));
+                    copy_inst.opcode = IR_OP_COPY;
+                    copy_inst.type_id = inst->type_id;
+                    copy_inst.operand0_id = (uint16_t)val1;
+                    copy_inst.original_order = func->num_insts;
+                    
+                    memmove(&func->instructions[term_pos1 + 1],
+                            &func->instructions[term_pos1],
+                            (func->num_insts - term_pos1) * sizeof(IRInst));
+                    
+                    func->instructions[term_pos1] = copy_inst;
+                    func->num_insts++;
+                    
+                    pred1->last_inst++;
+                    for (uint32_t b = 0; b < func->num_blocks; b++) {
+                        if (func->blocks[b].first_inst > term_pos1)
+                            func->blocks[b].first_inst++;
+                        if (func->blocks[b].last_inst >= term_pos1)
+                            func->blocks[b].last_inst++;
+                    }
+                    for (uint32_t v = 0; v < pool->num_values; v++) {
+                        if (pool->values[v].kind == IR_VALUE_INSTRUCTION &&
+                            pool->values[v].inst_id > term_pos1) {
+                            pool->values[v].inst_id++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 将 PHI 指令本身替换为 NOP
+        inst->opcode = IR_OP_NOP;
+    }
+}
+
 bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     if (!ctx || !func) return false;
     ctx->current_func = func;
     ctx->isel_cache_count = 0;
+
+    // PHI elimination: 寄存器分配前消除所有 PHI 指令
+    phi_elimination(func, ctx->module);
     
     RegisterAllocator *ra = ra_create(ctx);
     if (ra) {

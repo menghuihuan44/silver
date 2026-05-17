@@ -442,18 +442,37 @@ IRValueId ir_builder_phi(IRBuilder *builder, IRTypeId type,
                           IRValueId *incoming_values,
                           IRBlock **incoming_blocks) {
     if (!builder) return IR_VALUE_ID_INVALID;
+    
+    // ✅ 只支持两路分支 PHI（if-else）
+    if (num_incoming > 2) {
+        // 超过2个前驱的 PHI 暂不支持
+        silver_error_add(builder->module->error_ctx, SILVER_ERROR_ERROR,
+            SILVER_ERR_IR_INVALID_OPERAND, NULL,
+            "PHI nodes with more than 2 incoming values are not yet supported (got %u)",
+            num_incoming);
+        return IR_VALUE_ID_INVALID;
+    }
+    
     if (num_incoming == 0 || !incoming_values || !incoming_blocks) {
         return IR_VALUE_ID_INVALID;
     }
     
-    // 获取第一个传入块的值ID
+    // ✅ 获取传入块的值ID
     IRValueId block0_val = ir_value_create_block(&builder->module->value_pool,
                                                    incoming_blocks[0]->id);
+    IRValueId block1_val = IR_VALUE_ID_INVALID;
+    if (num_incoming == 2 && incoming_blocks[1]) {
+        block1_val = ir_value_create_block(&builder->module->value_pool,
+                                            incoming_blocks[1]->id);
+    }
     
-    // extra字段存储传入数量，operand0=第一个值，operand1=第一个块
+    // extra字段存储传入数量
+    // operand0 = 第一个值, operand1 = 第一个块, operand2 = 第二个值
     return add_inst(builder, IR_OP_PHI, type, 0,
-                    incoming_values[0], block0_val,
-                    IR_VALUE_ID_INVALID, num_incoming);
+                    incoming_values[0],                    // 值1
+                    block0_val,                            // 块1
+                    (num_incoming == 2) ? incoming_values[1] : IR_VALUE_ID_INVALID,  // 值2
+                    num_incoming);
 }
 
 // ============================================================
