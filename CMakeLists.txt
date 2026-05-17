@@ -198,8 +198,8 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
             -fdata-sections
             -ffunction-sections
         )
-        list(APPEND CMAKE_EXE_LINKER_FLAGS -flto -Wl,--gc-sections)
-        list(APPEND CMAKE_SHARED_LINKER_FLAGS -flto -Wl,--gc-sections)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto -Wl,--gc-sections")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto -Wl,--gc-sections") 
     elseif(SILVER_COMPILER_CLANG)
         list(APPEND SILVER_COMMON_FLAGS
             -O3
@@ -214,8 +214,8 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
             -fdata-sections
             -ffunction-sections
         )
-        list(APPEND CMAKE_EXE_LINKER_FLAGS -flto=thin -Wl,--gc-sections)
-        list(APPEND CMAKE_SHARED_LINKER_FLAGS -flto=thin -Wl,--gc-sections)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=thin -Wl,--gc-sections")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto=thin -Wl,--gc-sections") 
     elseif(SILVER_COMPILER_MSVC)
         list(APPEND SILVER_COMMON_FLAGS /O2 /GL /GS- /Gy)
         list(APPEND CMAKE_EXE_LINKER_FLAGS /LTCG /OPT:REF)
