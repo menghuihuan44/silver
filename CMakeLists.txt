@@ -171,51 +171,60 @@ endif()
 # 优化标志
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Build Type: Debug (no optimization, debug symbols)")
-    if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
+    if(SILVER_COMPILER_GCC)
         list(APPEND SILVER_COMMON_FLAGS -O0 -g3 -ggdb -fno-omit-frame-pointer)
+    elseif(SILVER_COMPILER_CLANG)
+        list(APPEND SILVER_COMMON_FLAGS -O0 -g3 -fno-omit-frame-pointer)
     elseif(SILVER_COMPILER_MSVC)
         list(APPEND SILVER_COMMON_FLAGS /Od /Zi)
     endif()
-    
 elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     message(STATUS "Build Type: Release (full optimization)")
-    if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
+    if(SILVER_COMPILER_GCC)
         list(APPEND SILVER_COMMON_FLAGS
             -O3
             -DNDEBUG
             -march=native
             -mtune=native
+            -flto
             -fomit-frame-pointer
             -fstrict-aliasing
-            -ffast-math
             -funroll-loops
             -finline-functions
             -ftree-vectorize
+            -fvisibility=hidden
+            -fdata-sections
+            -ffunction-sections
         )
-        # 链接时优化
-        if(SILVER_COMPILER_GCC)
-            list(APPEND SILVER_COMMON_FLAGS -flto)
-        elseif(SILVER_COMPILER_CLANG)
-            list(APPEND SILVER_COMMON_FLAGS -flto=thin)
-        endif()
+        list(APPEND CMAKE_EXE_LINKER_FLAGS -flto -Wl,--gc-sections)
+        list(APPEND CMAKE_SHARED_LINKER_FLAGS -flto -Wl,--gc-sections)
+    elseif(SILVER_COMPILER_CLANG)
+        list(APPEND SILVER_COMMON_FLAGS
+            -O3
+            -DNDEBUG
+            -march=native
+            -mtune=native
+            -flto=thin
+            -fomit-frame-pointer
+            -fstrict-aliasing
+            -funroll-loops
+            -fvisibility=hidden
+            -fdata-sections
+            -ffunction-sections
+        )
+        list(APPEND CMAKE_EXE_LINKER_FLAGS -flto=thin -Wl,--gc-sections)
+        list(APPEND CMAKE_SHARED_LINKER_FLAGS -flto=thin -Wl,--gc-sections)
     elseif(SILVER_COMPILER_MSVC)
-        list(APPEND SILVER_COMMON_FLAGS /O2 /GL /GS-)
+        list(APPEND SILVER_COMMON_FLAGS /O2 /GL /GS- /Gy)
+        list(APPEND CMAKE_EXE_LINKER_FLAGS /LTCG /OPT:REF)
+        list(APPEND CMAKE_SHARED_LINKER_FLAGS /LTCG /OPT:REF)
     endif()
-    
-elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    message(STATUS "Build Type: Release with Debug Info")
+
+    # 库的 LTO
     if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
-        list(APPEND SILVER_COMMON_FLAGS -O2 -g -DNDEBUG)
-    elseif(SILVER_COMPILER_MSVC)
-        list(APPEND SILVER_COMMON_FLAGS /O2 /Zi)
-    endif()
-    
-elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
-    message(STATUS "Build Type: Minimum Size Release")
-    if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
-        list(APPEND SILVER_COMMON_FLAGS -Os -DNDEBUG)
-    elseif(SILVER_COMPILER_MSVC)
-        list(APPEND SILVER_COMMON_FLAGS /O1)
+        set_target_properties(silver_static silver_shared PROPERTIES
+            INTERPROCEDURAL_OPTIMIZATION TRUE
+        )
     endif()
 endif()
 
