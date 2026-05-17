@@ -103,7 +103,7 @@ endif()
 set(SILVER_COMMON_FLAGS "")
 
 # 警告标志
-if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
+if(SILVER_COMPILER_GCC)
     list(APPEND SILVER_COMMON_FLAGS
         -Wall
         -Wextra
@@ -135,34 +135,37 @@ if(SILVER_COMPILER_GCC OR SILVER_COMPILER_CLANG)
         -Wno-unused-parameter
         -Wno-missing-field-initializers
     )
-    
-    # 将警告视为错误
-    if(SILVER_WARNINGS_AS_ERRORS)
-        list(APPEND SILVER_COMMON_FLAGS -Werror)
-    endif()
-    
-    # 断言控制
-    if(SILVER_ENABLE_ASSERTIONS)
-        list(APPEND SILVER_COMMON_FLAGS -DSILVER_ASSERTS=1)
-    endif()
-    
+elseif(SILVER_COMPILER_CLANG)
+    list(APPEND SILVER_COMMON_FLAGS
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wshadow
+        -Wstrict-prototypes
+        -Wmissing-prototypes
+        -Wold-style-definition
+        -Wmissing-declarations
+        -Wredundant-decls
+        -Wpointer-arith
+        -Wcast-align
+        -Wwrite-strings
+        -Wformat=2
+        -Wimplicit-fallthrough
+        -Wswitch-default
+        -Wuninitialized
+        -Wnull-dereference
+        -Wno-unused-parameter
+        -Wno-missing-field-initializers
+    )
 elseif(SILVER_COMPILER_MSVC)
     list(APPEND SILVER_COMMON_FLAGS
         /W4
-        /wd4200  # nonstandard extension: zero-sized array
-        /wd4201  # nonstandard extension: nameless struct/union
-        /wd4204  # nonstandard extension: non-constant aggregate initializer
-        /wd4221  # nonstandard extension: address of automatic
-        /wd4996  # deprecated functions
+        /wd4200
+        /wd4201
+        /wd4204
+        /wd4221
+        /wd4996
     )
-    
-    if(SILVER_WARNINGS_AS_ERRORS)
-        list(APPEND SILVER_COMMON_FLAGS /WX)
-    endif()
-    
-    if(SILVER_ENABLE_ASSERTIONS)
-        list(APPEND SILVER_COMMON_FLAGS /DSILVER_ASSERTS=1)
-    endif()
 endif()
 
 # 优化标志
