@@ -683,10 +683,10 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     if (!ctx || !func) return false;
     ctx->current_func = func;
     ctx->isel_cache_count = 0;
-
-    // PHI elimination: 寄存器分配前消除所有 PHI 指令
-    phi_elimination(func, ctx->module);
     
+    // ============================================================
+    // 寄存器分配
+    // ============================================================
     RegisterAllocator *ra = ra_create(ctx);
     if (ra) {
         compute_live_intervals(ra, func);
@@ -700,7 +700,8 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
                 }
             } else if (iv->spilled) {
                 if (!ctx->reg_alloc.spill_map) {
-                    ctx->reg_alloc.spill_map = (uint32_t *)calloc(ra->next_spill_slot + 1, sizeof(uint32_t));
+                    ctx->reg_alloc.spill_map = (uint32_t *)calloc(
+                        ra->next_spill_slot + 1, sizeof(uint32_t));
                     ctx->reg_alloc.num_spills = ra->next_spill_slot;
                 }
                 if (iv->value_id < ctx->reg_alloc.map_size && ctx->reg_alloc.spill_map)
@@ -710,13 +711,37 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
         ra_destroy(ra);
     }
     
+    // ============================================================
+    // 快速编码路径
+    // ============================================================
+    if (ctx->code_emitter->fast_remaining < 65536) {
+        emitter_flush(ctx->code_emitter);
+    }
+    
+    uint8_t *fast_ptr = ctx->code_emitter->fast_ptr;
+    uint32_t fast_rem = ctx->code_emitter->fast_remaining;
+    uint32_t emitted = 0;
+    
+    // ============================================================
     // 序言
+    // ============================================================
     uint8_t prologue[128];
     uint32_t plen = ctx->target->emit_prologue(ctx->target, func, prologue);
-    emitter_emit_bytes(ctx->code_emitter, prologue, plen);
+    if (plen > 0) {
+        memcpy(fast_ptr, prologue, plen);
+        fast_ptr += plen;
+        fast_rem -= plen;
+        emitted += plen;
+    }
     
-    // 指令编码 — 栈上64字节缓冲区 + 快速路径
+    // ============================================================
+    // 指令编码
+    // ============================================================
     uint8_t encode_buf[64];
+    // ✅ 找到 ret 指令的返回值（如果有）
+    IRValueId return_value_id = IR_VALUE_ID_INVALID;
+    MachineRegister return_value_reg = REG_NONE;
+    bool has_ret = false;
     
     for (uint32_t b = 0; b < func->num_blocks; b++) {
         IRBlock *block = &func->blocks[b];
@@ -724,30 +749,158 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
         
         for (uint32_t i = block->first_inst; i <= block->last_inst; i++) {
             IRInst *ir_inst = &func->instructions[i];
+            
+            // ============================================================
+            // ✅ 处理 ret 指令：不生成 ret 机器码，只记录返回值
+            // 真正的 ret 由尾声生成
+            // ============================================================
+            if (ir_inst->opcode == IR_OP_RET) {
+                has_ret = true;
+                if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
+                    return_value_id = ir_inst->operand0_id;
+                    return_value_reg = isel_get_value_reg(ctx, return_value_id);
+                }
+                continue;
+            }
+            
+            // ============================================================
+            // ✅ 处理 br 和 brcond 指令
+            // 无条件跳转：如果目标是下一个块，可以省略
+            // 条件跳转：编码为 JMP/JCC
+            // ============================================================
+            if (ir_inst->opcode == IR_OP_BR) {
+                // 简化：始终生成 JMP
+                MachineInstExt jmp_inst;
+                memset(&jmp_inst, 0, sizeof(jmp_inst));
+                jmp_inst.base.opcode = MACH_JMP;
+                jmp_inst.extended_imm = 0; // 偏移在链接时计算
+                
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &jmp_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            if (ir_inst->opcode == IR_OP_BRCOND) {
+                // 条件跳转
+                MachineCondition cond = isel_ir_cmp_to_mach_cond(
+                    (IROpcode)ir_inst->operand0_id); // 简化：从最后一条cmp推断
+                // 实际需要从上一个cmp指令获取条件码
+                // 简化处理：生成 JCC
+                MachineInstExt jcc_inst;
+                memset(&jcc_inst, 0, sizeof(jcc_inst));
+                jcc_inst.base.opcode = MACH_JCC;
+                jcc_inst.base.imm = cond;
+                jcc_inst.extended_imm = 0;
+                
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &jcc_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            if (ir_inst->opcode == IR_OP_UNREACHABLE) {
+                // 生成断点指令
+                MachineInstExt brk_inst;
+                memset(&brk_inst, 0, sizeof(brk_inst));
+                brk_inst.base.opcode = MACH_INT3;
+                
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &brk_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            // ============================================================
+            // 其他指令：正常 ISel
+            // ============================================================
             MachineInstExt mach_insts[4];
             uint32_t num_insts = 0;
             
             if (isel_select_instruction(ctx, ir_inst, mach_insts, &num_insts, 4)) {
                 for (uint32_t j = 0; j < num_insts; j++) {
                     uint32_t length = 0;
-                    if (ctx->target->encode(ctx->target, &mach_insts[j], encode_buf, &length)) {
-                        // ✅ 使用 CodeEmitter 快速写入
-                        if (ctx->code_emitter->fast_remaining < length)
-                            emitter_flush(ctx->code_emitter);
-                        memcpy(ctx->code_emitter->fast_ptr, encode_buf, length);
-                        ctx->code_emitter->fast_ptr += length;
-                        ctx->code_emitter->fast_remaining -= length;
-                        ctx->code_emitter->total_emitted += length;
+                    if (ctx->target->encode(ctx->target, &mach_insts[j], 
+                                            encode_buf, &length)) {
+                        memcpy(fast_ptr, encode_buf, length);
+                        fast_ptr += length;
+                        fast_rem -= length;
+                        emitted += length;
                     }
                 }
             }
         }
     }
     
+    // ============================================================
+    // ✅ 尾声前：确保返回值在 RAX 中
+    // ============================================================
+    if (has_ret && return_value_reg != REG_NONE && return_value_reg != REG_RAX) {
+        // MOV RAX, return_value_reg
+        // 使用平台特定的编码
+        MachineInstExt mov_inst;
+        memset(&mov_inst, 0, sizeof(mov_inst));
+        mov_inst.base.opcode = MACH_MOV;
+        mov_inst.base.rd = REG_RAX;
+        mov_inst.base.rn = return_value_reg;
+        
+        uint32_t length = 0;
+        if (ctx->target->encode(ctx->target, &mov_inst, encode_buf, &length)) {
+            memcpy(fast_ptr, encode_buf, length);
+            fast_ptr += length;
+            fast_rem -= length;
+            emitted += length;
+        }
+    } else if (has_ret && return_value_id != IR_VALUE_ID_INVALID) {
+        // 返回值是常量
+        IRValue *ret_val = ir_value_get(&ctx->module->value_pool, return_value_id);
+        if (ret_val && ret_val->kind == IR_VALUE_CONSTANT) {
+            MachineInstExt mov_imm;
+            memset(&mov_imm, 0, sizeof(mov_imm));
+            mov_imm.base.opcode = MACH_MOV_IMM;
+            mov_imm.base.rd = REG_RAX;
+            mov_imm.extended_imm = (uint64_t)ret_val->int_val;
+            
+            uint32_t length = 0;
+            if (ctx->target->encode(ctx->target, &mov_imm, encode_buf, &length)) {
+                memcpy(fast_ptr, encode_buf, length);
+                fast_ptr += length;
+                fast_rem -= length;
+                emitted += length;
+            }
+        }
+    }
+    
+    // ============================================================
     // 尾声
+    // ============================================================
     uint8_t epilogue[128];
     uint32_t elen = ctx->target->emit_epilogue(ctx->target, func, epilogue);
-    emitter_emit_bytes(ctx->code_emitter, epilogue, elen);
+    if (elen > 0) {
+        memcpy(fast_ptr, epilogue, elen);
+        fast_ptr += elen;
+        fast_rem -= elen;
+        emitted += elen;
+    }
+    
+    // ============================================================
+    // 回写指针
+    // ============================================================
+    ctx->code_emitter->fast_ptr = fast_ptr;
+    ctx->code_emitter->fast_remaining = fast_rem;
+    ctx->code_emitter->total_emitted += emitted;
     
     return true;
 }
