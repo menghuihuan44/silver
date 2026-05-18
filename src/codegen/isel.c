@@ -847,32 +847,34 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     // ============================================================
     // ✅ 尾声前：确保返回值在 RAX 中
     // ============================================================
-    if (has_ret && return_value_reg != REG_NONE && return_value_reg != REG_RAX) {
-        // MOV RAX, return_value_reg
-        // 使用平台特定的编码
-        MachineInstExt mov_inst;
-        memset(&mov_inst, 0, sizeof(mov_inst));
-        mov_inst.base.opcode = MACH_MOV;
-        mov_inst.base.rd = REG_RAX;
-        mov_inst.base.rn = return_value_reg;
-        
-        uint32_t length = 0;
-        if (ctx->target->encode(ctx->target, &mov_inst, encode_buf, &length)) {
-            memcpy(fast_ptr, encode_buf, length);
-            fast_ptr += length;
-            fast_rem -= length;
-            emitted += length;
-        }
-    } else if (has_ret && return_value_id != IR_VALUE_ID_INVALID) {
-        // 返回值是常量
-        IRValue *ret_val = ir_value_get(&ctx->module->value_pool, return_value_id);
-        if (ret_val && ret_val->kind == IR_VALUE_CONSTANT) {
+    if (has_ret && return_value_id != IR_VALUE_ID_INVALID) {
+    IRValue *ret_val = ir_value_get(&ctx->module->value_pool, return_value_id);
+    if (ret_val) {
+        // ✅ 先检查是否已经分配了寄存器
+        MachineRegister ret_reg = isel_get_value_reg(ctx, return_value_id);
+        if (ret_reg != REG_NONE) {
+            // 已经在寄存器中，移到 RAX
+            if (ret_reg != REG_RAX) {
+                MachineInstExt mov_inst;
+                memset(&mov_inst, 0, sizeof(mov_inst));
+                mov_inst.base.opcode = MACH_MOV;
+                mov_inst.base.rd = REG_RAX;
+                mov_inst.base.rn = ret_reg;
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &mov_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+            }
+        } else if (ret_val->kind == IR_VALUE_CONSTANT) {
+            // 常量，直接 MOV_IMM
             MachineInstExt mov_imm;
             memset(&mov_imm, 0, sizeof(mov_imm));
             mov_imm.base.opcode = MACH_MOV_IMM;
             mov_imm.base.rd = REG_RAX;
             mov_imm.extended_imm = (uint64_t)ret_val->int_val;
-            
             uint32_t length = 0;
             if (ctx->target->encode(ctx->target, &mov_imm, encode_buf, &length)) {
                 memcpy(fast_ptr, encode_buf, length);
@@ -882,6 +884,7 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
             }
         }
     }
+} 
     
     // ============================================================
     // 尾声
