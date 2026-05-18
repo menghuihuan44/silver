@@ -754,29 +754,29 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
             // ✅ 处理 ret 指令：不生成 ret 机器码，只记录返回值
             // 真正的 ret 由尾声生成
             // ============================================================
-            // 跟踪 ret 指令的操作数
             if (ir_inst->opcode == IR_OP_RET) {
                 has_ret = true;
                 if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
                     return_value_id = ir_inst->operand0_id;
         
-                    // ✅ 跟踪 COPY 链：如果操作数是指令结果，找到真正的值
+                    // ✅ 在值池中找这个值ID，看它是不是常量
                     IRValue *rv = ir_value_get(&ctx->module->value_pool, return_value_id);
-                    if (rv && rv->kind == IR_VALUE_INSTRUCTION) {
-                        uint32_t def_inst_idx = rv->inst_id;
-                        if (def_inst_idx < func->num_insts) {
-                            IRInst *def_inst = &func->instructions[def_inst_idx];
-                            if (def_inst->opcode == IR_OP_COPY) {
-                                // COPY 指令：真正的值是 operand0
-                                return_value_id = def_inst->operand0_id;
-                            }
-                        }
+        
+                    // ✅ 如果是指令结果，跟踪到 COPY 的源
+                    while (rv && rv->kind == IR_VALUE_INSTRUCTION) {
+                        uint32_t def_idx = rv->inst_id;
+                        if (def_idx >= func->num_insts) break;
+                        IRInst *def = &func->instructions[def_idx];
+                        if (def->opcode != IR_OP_COPY) break;
+                        // 跟踪 COPY 的源
+                        return_value_id = def->operand0_id;
+                        rv = ir_value_get(&ctx->module->value_pool, return_value_id);
                     }
         
                     return_value_reg = isel_get_value_reg(ctx, return_value_id);
                 }
                 continue;
-            } 
+            }
             
             // ============================================================
             // ✅ 处理 br 和 brcond 指令
