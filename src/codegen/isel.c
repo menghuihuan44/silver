@@ -890,21 +890,26 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
 bool codegen_generate(CodeGenContext *ctx, SilverBuffer *output) {
     if (!ctx || !output || !ctx->module) return false;
     
-    // ✅ 重置 emitter
-    emitter_flush(ctx->code_emitter);
-    ctx->code_emitter->fast_ptr = ctx->code_emitter->active->data;
-    ctx->code_emitter->fast_remaining = ctx->code_emitter->active->size;
+    // ✅ 重置：清空两个缓冲区，确保 primary 是活跃的
+    silver_buffer_reset(ctx->code_emitter->primary);
+    silver_buffer_reset(ctx->code_emitter->secondary);
+    ctx->code_emitter->active = ctx->code_emitter->primary;
+    ctx->code_emitter->fast_ptr = ctx->code_emitter->primary->data;
+    ctx->code_emitter->fast_end = ctx->code_emitter->primary->data + ctx->code_emitter->primary->size;
+    ctx->code_emitter->fast_remaining = ctx->code_emitter->primary->size;
+    ctx->code_emitter->total_emitted = 0;
+    ctx->code_emitter->num_flushes = 0;
     
     for (uint32_t i = 0; i < ctx->module->num_functions; i++) {
         if (!codegen_generate_function(ctx, &ctx->module->functions[i]))
             return false;
     }
     
-    // ✅ 同步并输出
+    // ✅ 同步 fast_ptr 到 buffer 的 length
     emitter_sync_fast(ctx->code_emitter);
-    emitter_flush(ctx->code_emitter);
     
-    // 将 emitter 主缓冲区内容复制到 output
+    // ✅ 将 primary 的内容复制到 output（不调用 emitter_flush）
+    // emitter_flush 会切换缓冲区，我们只需要把 primary 的内容拿出来
     silver_buffer_append(output, ctx->code_emitter->primary);
     
     return true;
