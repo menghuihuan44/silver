@@ -712,62 +712,6 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     }
     
     // ============================================================
-    // ✅ 在编码之前，先扫描所有 ret 指令，找到最终的返回值
-    // 处理优化后的 COPY 链
-    // ============================================================
-    IRValueId return_value_id = IR_VALUE_ID_INVALID;
-    bool has_ret = false;
-    IRValuePool *pool = &ctx->module->value_pool;
-    
-    for (uint32_t b = 0; b < func->num_blocks; b++) {
-        IRBlock *block = &func->blocks[b];
-        if (block->first_inst == IR_VALUE_ID_INVALID) continue;
-        
-        for (uint32_t i = block->first_inst; i <= block->last_inst; i++) {
-            IRInst *ir_inst = &func->instructions[i];
-            if (ir_inst->opcode != IR_OP_RET) continue;
-            
-            has_ret = true;
-            IRValueId op_id = ir_inst->operand0_id;
-            
-            if (op_id == IR_VALUE_ID_INVALID) break;
-            
-            // ✅ 通过遍历整个值池，找到最终的实际值
-            // 处理 COPY 链和优化后的值替换
-            for (int chain = 0; chain < 10; chain++) {
-                IRValue *val = ir_value_get(pool, op_id);
-                if (!val) break;
-                
-                if (val->kind == IR_VALUE_CONSTANT) {
-                    // 找到常量，直接用
-                    return_value_id = op_id;
-                    break;
-                } else if (val->kind == IR_VALUE_INSTRUCTION) {
-                    // 跟踪定义指令
-                    uint32_t def_idx = val->inst_id;
-                    if (def_idx >= func->num_insts) break;
-                    
-                    IRInst *def = &func->instructions[def_idx];
-                    if (def->opcode == IR_OP_COPY) {
-                        // COPY %src → 跟踪源操作数
-                        op_id = def->operand0_id;
-                        continue;
-                    } else {
-                        // 其他指令：结果在值池中，检查 RA 是否分配了寄存器
-                        return_value_id = op_id;
-                        break;
-                    }
-                } else {
-                    return_value_id = op_id;
-                    break;
-                }
-            }
-            break;  // 只处理第一个 ret
-        }
-        if (has_ret) break;
-    }
-    
-    // ============================================================
     // 快速编码路径
     // ============================================================
     if (ctx->code_emitter->fast_remaining < 65536) {
@@ -777,7 +721,6 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     uint8_t *fast_ptr = ctx->code_emitter->fast_ptr;
     uint32_t fast_rem = ctx->code_emitter->fast_remaining;
     uint32_t emitted = 0;
-    uint8_t encode_buf[64];
     
     // ============================================================
     // 序言
@@ -792,8 +735,13 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     }
     
     // ============================================================
-    // 指令编码：跳过所有终结指令（ret, br, brcond）
+    // 指令编码
     // ============================================================
+    uint8_t encode_buf[64];
+    IRValueId return_value_id = IR_VALUE_ID_INVALID;
+    MachineRegister return_value_reg = REG_NONE;
+    bool has_ret = false;
+    
     for (uint32_t b = 0; b < func->num_blocks; b++) {
         IRBlock *block = &func->blocks[b];
         if (block->first_inst == IR_VALUE_ID_INVALID) continue;
@@ -801,17 +749,81 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
         for (uint32_t i = block->first_inst; i <= block->last_inst; i++) {
             IRInst *ir_inst = &func->instructions[i];
             
-            // 跳过所有终结指令
-            if (ir_opcode_is_terminator(ir_inst->opcode)) continue;
+            // ============================================================
+            // ret 指令：记录返回值，不生成机器码（尾声处理 ret）
+            // ============================================================
+            if (ir_inst->opcode == IR_OP_RET) {
+                has_ret = true;
+                if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
+                    return_value_id = ir_inst->operand0_id;
+                    // 确保返回值已分配寄存器
+                    return_value_reg = isel_get_value_reg(ctx, return_value_id);
+                    if (return_value_reg == REG_NONE) {
+                        return_value_reg = isel_allocate_register(
+                            ctx, REG_CLASS_GPR, return_value_id);
+                    }
+                }
+                continue;
+            }
             
-            // 正常 ISel
+            // ============================================================
+            // br / brcond / unreachable 指令
+            // ============================================================
+            if (ir_inst->opcode == IR_OP_BR) {
+                MachineInstExt jmp_inst;
+                memset(&jmp_inst, 0, sizeof(jmp_inst));
+                jmp_inst.base.opcode = MACH_JMP;
+                jmp_inst.extended_imm = 0;
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &jmp_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            if (ir_inst->opcode == IR_OP_BRCOND) {
+                MachineInstExt jcc_inst;
+                memset(&jcc_inst, 0, sizeof(jcc_inst));
+                jcc_inst.base.opcode = MACH_JCC;
+                jcc_inst.base.imm = COND_E; // 简化
+                jcc_inst.extended_imm = 0;
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &jcc_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            if (ir_inst->opcode == IR_OP_UNREACHABLE) {
+                MachineInstExt brk_inst;
+                memset(&brk_inst, 0, sizeof(brk_inst));
+                brk_inst.base.opcode = MACH_INT3;
+                uint32_t length = 0;
+                if (ctx->target->encode(ctx->target, &brk_inst, encode_buf, &length)) {
+                    memcpy(fast_ptr, encode_buf, length);
+                    fast_ptr += length;
+                    fast_rem -= length;
+                    emitted += length;
+                }
+                continue;
+            }
+            
+            // ============================================================
+            // 其他指令：正常 ISel
+            // ============================================================
             MachineInstExt mach_insts[4];
             uint32_t num_insts = 0;
             
             if (isel_select_instruction(ctx, ir_inst, mach_insts, &num_insts, 4)) {
                 for (uint32_t j = 0; j < num_insts; j++) {
                     uint32_t length = 0;
-                    if (ctx->target->encode(ctx->target, &mach_insts[j], 
+                    if (ctx->target->encode(ctx->target, &mach_insts[j],
                                             encode_buf, &length)) {
                         memcpy(fast_ptr, encode_buf, length);
                         fast_ptr += length;
@@ -824,42 +836,58 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     }
     
     // ============================================================
-    // ✅ 返回值处理：根据最终的 return_value_id 生成 MOV RAX, ...
+    // 尾声前：确保返回值在 RAX 中
     // ============================================================
-    if (has_ret && return_value_id != IR_VALUE_ID_INVALID) {
-        IRValue *final_val = ir_value_get(pool, return_value_id);
-        
-        if (final_val && final_val->kind == IR_VALUE_CONSTANT) {
-            // 常量 → MOV RAX, imm
-            MachineInstExt mov_imm;
-            memset(&mov_imm, 0, sizeof(mov_imm));
-            mov_imm.base.opcode = MACH_MOV_IMM;
-            mov_imm.base.rd = REG_RAX;
-            mov_imm.extended_imm = (uint64_t)final_val->int_val;
-            
+    if (has_ret) {
+        if (return_value_reg != REG_NONE && return_value_reg != REG_RAX) {
+            // 返回值在寄存器中，移到 RAX
+            MachineInstExt mov_reg;
+            memset(&mov_reg, 0, sizeof(mov_reg));
+            mov_reg.base.opcode = MACH_MOV;
+            mov_reg.base.rd = REG_RAX;
+            mov_reg.base.rn = return_value_reg;
             uint32_t length = 0;
-            if (ctx->target->encode(ctx->target, &mov_imm, encode_buf, &length)) {
+            if (ctx->target->encode(ctx->target, &mov_reg, encode_buf, &length)) {
                 memcpy(fast_ptr, encode_buf, length);
                 fast_ptr += length;
                 fast_rem -= length;
                 emitted += length;
             }
-        } else {
-            // 寄存器 → MOV RAX, reg
-            MachineRegister ret_reg = isel_get_value_reg(ctx, return_value_id);
-            if (ret_reg != REG_NONE && ret_reg != REG_RAX) {
-                MachineInstExt mov_inst;
-                memset(&mov_inst, 0, sizeof(mov_inst));
-                mov_inst.base.opcode = MACH_MOV;
-                mov_inst.base.rd = REG_RAX;
-                mov_inst.base.rn = ret_reg;
-                
+        } else if (return_value_id != IR_VALUE_ID_INVALID && return_value_reg == REG_NONE) {
+            // 返回值是常量
+            IRValue *ret_val = ir_value_get(&ctx->module->value_pool, return_value_id);
+            if (ret_val && ret_val->kind == IR_VALUE_CONSTANT) {
+                MachineInstExt mov_imm;
+                memset(&mov_imm, 0, sizeof(mov_imm));
+                mov_imm.base.opcode = MACH_MOV_IMM;
+                mov_imm.base.rd = REG_RAX;
+                mov_imm.extended_imm = (uint64_t)ret_val->int_val;
                 uint32_t length = 0;
-                if (ctx->target->encode(ctx->target, &mov_inst, encode_buf, &length)) {
+                if (ctx->target->encode(ctx->target, &mov_imm, encode_buf, &length)) {
                     memcpy(fast_ptr, encode_buf, length);
                     fast_ptr += length;
                     fast_rem -= length;
                     emitted += length;
+                }
+            } else if (ret_val && ret_val->kind == IR_VALUE_INSTRUCTION) {
+                // 指令结果：强制分配寄存器并移到 RAX
+                MachineRegister res_reg = isel_get_value_reg(ctx, return_value_id);
+                if (res_reg == REG_NONE) {
+                    res_reg = isel_allocate_register(ctx, REG_CLASS_GPR, return_value_id);
+                }
+                if (res_reg != REG_NONE && res_reg != REG_RAX) {
+                    MachineInstExt mov_reg2;
+                    memset(&mov_reg2, 0, sizeof(mov_reg2));
+                    mov_reg2.base.opcode = MACH_MOV;
+                    mov_reg2.base.rd = REG_RAX;
+                    mov_reg2.base.rn = res_reg;
+                    uint32_t length = 0;
+                    if (ctx->target->encode(ctx->target, &mov_reg2, encode_buf, &length)) {
+                        memcpy(fast_ptr, encode_buf, length);
+                        fast_ptr += length;
+                        fast_rem -= length;
+                        emitted += length;
+                    }
                 }
             }
         }
@@ -890,26 +918,21 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
 bool codegen_generate(CodeGenContext *ctx, SilverBuffer *output) {
     if (!ctx || !output || !ctx->module) return false;
     
-    // ✅ 重置：清空两个缓冲区，确保 primary 是活跃的
-    silver_buffer_reset(ctx->code_emitter->primary);
-    silver_buffer_reset(ctx->code_emitter->secondary);
-    ctx->code_emitter->active = ctx->code_emitter->primary;
-    ctx->code_emitter->fast_ptr = ctx->code_emitter->primary->data;
-    ctx->code_emitter->fast_end = ctx->code_emitter->primary->data + ctx->code_emitter->primary->size;
-    ctx->code_emitter->fast_remaining = ctx->code_emitter->primary->size;
-    ctx->code_emitter->total_emitted = 0;
-    ctx->code_emitter->num_flushes = 0;
+    // ✅ 重置 emitter
+    emitter_flush(ctx->code_emitter);
+    ctx->code_emitter->fast_ptr = ctx->code_emitter->active->data;
+    ctx->code_emitter->fast_remaining = ctx->code_emitter->active->size;
     
     for (uint32_t i = 0; i < ctx->module->num_functions; i++) {
         if (!codegen_generate_function(ctx, &ctx->module->functions[i]))
             return false;
     }
     
-    // ✅ 同步 fast_ptr 到 buffer 的 length
+    // ✅ 同步并输出
     emitter_sync_fast(ctx->code_emitter);
+    emitter_flush(ctx->code_emitter);
     
-    // ✅ 将 primary 的内容复制到 output（不调用 emitter_flush）
-    // emitter_flush 会切换缓冲区，我们只需要把 primary 的内容拿出来
+    // 将 emitter 主缓冲区内容复制到 output
     silver_buffer_append(output, ctx->code_emitter->primary);
     
     return true;
