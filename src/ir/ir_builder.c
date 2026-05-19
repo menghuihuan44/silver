@@ -159,16 +159,11 @@ static IRValueId add_inst(IRBuilder *builder, IROpcode opcode, IRTypeId type_id,
     uint32_t inst_idx = func->num_insts - 1;
     
     if (builder->current_block) {
-        printf("DEBUG add_inst: block %s, setting first/last to %u\n",
-           builder->current_block->name ? builder->current_block->name : "?",
-           inst_idx);
         if (builder->current_block->first_inst == IR_VALUE_ID_INVALID) {
             builder->current_block->first_inst = inst_idx;
         }
         builder->current_block->last_inst = inst_idx;
-    } else {
-    printf("DEBUG add_inst: current_block is NULL!\n");
-}
+    }
     
     // 如果指令产生结果，通过映射表获取/创建正确的值ID
     if (type_id != IR_TYPE_ID_INVALID && type_id != 0) {

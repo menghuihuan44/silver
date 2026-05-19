@@ -686,8 +686,6 @@ static bool get_return_constant(IRValuePool *pool, IRValueId value_id,
                                  IRFunction *func, int64_t *out_val) {
     IRValue *val = ir_value_get(pool, value_id);
     if (!val) return false;
-    printf("DEBUG: value_id=%u, kind=%d, int_val=%lld\n", 
-           value_id, val->kind, (long long)val->int_val);
     
     // 直接就是常量
     if (val->kind == IR_VALUE_CONSTANT) {
@@ -741,13 +739,6 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     if (!ctx || !func) return false;
     ctx->current_func = func;
     ctx->isel_cache_count = 0;
-    printf("DEBUG: func=%s, num_blocks=%u, num_insts=%u\n",
-           func->name ? func->name : "?", func->num_blocks, func->num_insts);
-    for (uint32_t b = 0; b < func->num_blocks; b++) {
-        IRBlock *block = &func->blocks[b];
-        printf("DEBUG: block %u: first=%u, last=%u, sealed=%d\n",
-               b, block->first_inst, block->last_inst, block->is_sealed);
-    }
     
     // ============================================================
     // 寄存器分配
@@ -806,112 +797,82 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     IRValueId return_value_id = IR_VALUE_ID_INVALID;
     bool has_ret = false;
     
-    for (uint32_t b = 0; b < func->num_blocks; b++) {
-        IRBlock *block = &func->blocks[b];
-        if (block->first_inst == IR_VALUE_ID_INVALID) continue;
+    for (uint32_t i = 0; i < func->num_insts; i++) {
+        IRInst *ir_inst = &func->instructions[i];
+    
+        if (ir_inst->opcode == IR_OP_RET) {
+            has_ret = true;
+            if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
+                return_value_id = ir_inst->operand0_id;
+            }
+            continue;
+        }
+    
+        if (ir_inst->opcode == IR_OP_BR) {
+            MachineInstExt jmp_inst;
+            memset(&jmp_inst, 0, sizeof(jmp_inst));
+            jmp_inst.base.opcode = MACH_JMP;
+            jmp_inst.extended_imm = 0;
         
-        for (uint32_t i = block->first_inst; i <= block->last_inst; i++) {
-            IRInst *ir_inst = &func->instructions[i];
-            static int _dbg3 = 0;
-    if (!_dbg3++) {
-        printf("DEBUG: block %u, first=%u, last=%u, num_insts=%u\n",
-               b, block->first_inst, block->last_inst, func->num_insts);
-        for (uint32_t di = block->first_inst; di <= block->last_inst; di++) {
-            printf("DEBUG: inst[%u] opcode=%u\n", di, func->instructions[di].opcode);
+            uint32_t length = 0;
+            if (ctx->target->encode(ctx->target, &jmp_inst, encode_buf, &length)) {
+                memcpy(fast_ptr, encode_buf, length);
+                fast_ptr += length;
+                fast_rem -= length;
+                emitted += length;
+            }
+            continue;
         }
-    }
-            
-            // ============================================================
-            // ret 指令：不生成机器码，只记录返回值
-            // ============================================================
-            if (ir_inst->opcode == IR_OP_RET) {
-                has_ret = true;
-                printf("DEBUG: found RET, operand0=%u, INVALID=%u\n", 
-           ir_inst->operand0_id, IR_VALUE_ID_INVALID);
-                if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
-                    return_value_id = ir_inst->operand0_id;
-                    printf("DEBUG: return_value_id set to %u\n", return_value_id);
-                }
-                continue;
+    
+        if (ir_inst->opcode == IR_OP_BRCOND) {
+            MachineInstExt jcc_inst;
+            memset(&jcc_inst, 0, sizeof(jcc_inst));
+            jcc_inst.base.opcode = MACH_JCC;
+            jcc_inst.base.imm = COND_E;
+            jcc_inst.extended_imm = 0;
+        
+            uint32_t length = 0;
+            if (ctx->target->encode(ctx->target, &jcc_inst, encode_buf, &length)) {
+                memcpy(fast_ptr, encode_buf, length);
+                fast_ptr += length;
+                fast_rem -= length;
+                emitted += length;
             }
-            
-            // ============================================================
-            // br 指令：无条件跳转
-            // ============================================================
-            if (ir_inst->opcode == IR_OP_BR) {
-                MachineInstExt jmp_inst;
-                memset(&jmp_inst, 0, sizeof(jmp_inst));
-                jmp_inst.base.opcode = MACH_JMP;
-                jmp_inst.extended_imm = 0;
-                
+            continue;
+        }
+    
+        if (ir_inst->opcode == IR_OP_UNREACHABLE) {
+            MachineInstExt brk_inst;
+            memset(&brk_inst, 0, sizeof(brk_inst));
+            brk_inst.base.opcode = MACH_INT3;
+        
+            uint32_t length = 0;
+            if (ctx->target->encode(ctx->target, &brk_inst, encode_buf, &length)) {
+                memcpy(fast_ptr, encode_buf, length);
+                fast_ptr += length;
+                fast_rem -= length;
+                emitted += length;
+            }
+            continue;
+        }
+    
+        // 其他指令：正常 ISel
+        MachineInstExt mach_insts[4];
+        uint32_t num_insts = 0;
+    
+        if (isel_select_instruction(ctx, ir_inst, mach_insts, &num_insts, 4)) {
+            for (uint32_t j = 0; j < num_insts; j++) {
                 uint32_t length = 0;
-                if (ctx->target->encode(ctx->target, &jmp_inst, encode_buf, &length)) {
+                if (ctx->target->encode(ctx->target, &mach_insts[j], 
+                                        encode_buf, &length)) {
                     memcpy(fast_ptr, encode_buf, length);
                     fast_ptr += length;
                     fast_rem -= length;
                     emitted += length;
-                }
-                continue;
-            }
-            
-            // ============================================================
-            // brcond 指令：条件跳转
-            // ============================================================
-            if (ir_inst->opcode == IR_OP_BRCOND) {
-                MachineInstExt jcc_inst;
-                memset(&jcc_inst, 0, sizeof(jcc_inst));
-                jcc_inst.base.opcode = MACH_JCC;
-                jcc_inst.base.imm = COND_E;
-                jcc_inst.extended_imm = 0;
-                
-                uint32_t length = 0;
-                if (ctx->target->encode(ctx->target, &jcc_inst, encode_buf, &length)) {
-                    memcpy(fast_ptr, encode_buf, length);
-                    fast_ptr += length;
-                    fast_rem -= length;
-                    emitted += length;
-                }
-                continue;
-            }
-            
-            // ============================================================
-            // unreachable 指令
-            // ============================================================
-            if (ir_inst->opcode == IR_OP_UNREACHABLE) {
-                MachineInstExt brk_inst;
-                memset(&brk_inst, 0, sizeof(brk_inst));
-                brk_inst.base.opcode = MACH_INT3;
-                
-                uint32_t length = 0;
-                if (ctx->target->encode(ctx->target, &brk_inst, encode_buf, &length)) {
-                    memcpy(fast_ptr, encode_buf, length);
-                    fast_ptr += length;
-                    fast_rem -= length;
-                    emitted += length;
-                }
-                continue;
-            }
-            
-            // ============================================================
-            // 其他指令：正常 ISel
-            // ============================================================
-            MachineInstExt mach_insts[4];
-            uint32_t num_insts = 0;
-            
-            if (isel_select_instruction(ctx, ir_inst, mach_insts, &num_insts, 4)) {
-                for (uint32_t j = 0; j < num_insts; j++) {
-                    uint32_t length = 0;
-                    if (ctx->target->encode(ctx->target, &mach_insts[j], 
-                                            encode_buf, &length)) {
-                        memcpy(fast_ptr, encode_buf, length);
-                        fast_ptr += length;
-                        fast_rem -= length;
-                        emitted += length;
-                    }
                 }
             }
         }
-    }
+    } 
     
     // ============================================================
     // 尾声前：确保返回值在 RAX 中
