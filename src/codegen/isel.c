@@ -741,6 +741,13 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
     if (!ctx || !func) return false;
     ctx->current_func = func;
     ctx->isel_cache_count = 0;
+    printf("DEBUG: func=%s, num_blocks=%u, num_insts=%u\n",
+           func->name ? func->name : "?", func->num_blocks, func->num_insts);
+    for (uint32_t b = 0; b < func->num_blocks; b++) {
+        IRBlock *block = &func->blocks[b];
+        printf("DEBUG: block %u: first=%u, last=%u, sealed=%d\n",
+               b, block->first_inst, block->last_inst, block->is_sealed);
+    }
     
     // ============================================================
     // 寄存器分配
