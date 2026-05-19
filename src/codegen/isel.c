@@ -811,8 +811,11 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
             // ============================================================
             if (ir_inst->opcode == IR_OP_RET) {
                 has_ret = true;
+                printf("DEBUG: found RET, operand0=%u, INVALID=%u\n", 
+           ir_inst->operand0_id, IR_VALUE_ID_INVALID);
                 if (ir_inst->operand0_id != IR_VALUE_ID_INVALID) {
                     return_value_id = ir_inst->operand0_id;
+                    printf("DEBUG: return_value_id set to %u\n", return_value_id);
                 }
                 continue;
             }
