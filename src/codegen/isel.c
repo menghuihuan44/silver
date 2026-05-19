@@ -805,6 +805,14 @@ bool codegen_generate_function(CodeGenContext *ctx, IRFunction *func) {
         
         for (uint32_t i = block->first_inst; i <= block->last_inst; i++) {
             IRInst *ir_inst = &func->instructions[i];
+            static int _dbg3 = 0;
+    if (!_dbg3++) {
+        printf("DEBUG: block %u, first=%u, last=%u, num_insts=%u\n",
+               b, block->first_inst, block->last_inst, func->num_insts);
+        for (uint32_t di = block->first_inst; di <= block->last_inst; di++) {
+            printf("DEBUG: inst[%u] opcode=%u\n", di, func->instructions[di].opcode);
+        }
+    }
             
             // ============================================================
             // ret 指令：不生成机器码，只记录返回值
