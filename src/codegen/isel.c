@@ -686,6 +686,8 @@ static bool get_return_constant(IRValuePool *pool, IRValueId value_id,
                                  IRFunction *func, int64_t *out_val) {
     IRValue *val = ir_value_get(pool, value_id);
     if (!val) return false;
+    printf("DEBUG: value_id=%u, kind=%d, int_val=%lld\n", 
+           value_id, val->kind, (long long)val->int_val);
     
     // 直接就是常量
     if (val->kind == IR_VALUE_CONSTANT) {
